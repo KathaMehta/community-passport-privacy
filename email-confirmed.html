@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Email Confirmed — Community Learning Passport</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.5;
+        color: #0f172a;
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1.25rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        color: #115e59;
+      }
+      p {
+        margin: 0 0 0.75rem;
+      }
+      .meta {
+        color: #64748b;
+        font-size: 0.9rem;
+        margin-bottom: 1.5rem;
+      }
+      .card {
+        background: #f0fdfa;
+        border: 1px solid #99f6e4;
+        border-radius: 12px;
+        padding: 1.25rem;
+        margin-top: 1rem;
+      }
+      .error {
+        background: #fef2f2;
+        border-color: #fecaca;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <p><strong>Community Learning Passport</strong></p>
+    <p class="meta">Email confirmation</p>
+
+    <div id="state-loading">
+      <h1>Confirming your email…</h1>
+      <p>Please wait while we verify your link.</p>
+    </div>
+
+    <div id="state-success" class="hidden">
+      <h1>Email confirmed</h1>
+      <div class="card">
+        <p>
+          Thank you for creating an account with Community Learning Passport. Your email is verified —
+          please proceed to sign in.
+        </p>
+        <p>Open the Community Learning Passport app and sign in with your email and password.</p>
+      </div>
+    </div>
+
+    <div id="state-already" class="hidden">
+      <h1>Already confirmed</h1>
+      <div class="card">
+        <p>Your email was already verified. You can sign in anytime in the Community Learning Passport app.</p>
+      </div>
+    </div>
+
+    <div id="state-invalid" class="hidden">
+      <h1>Link expired or invalid</h1>
+      <div class="card error">
+        <p>This confirmation link is no longer valid. Open the app and request a new confirmation email.</p>
+      </div>
+    </div>
+
+    <div id="state-error" class="hidden">
+      <h1>Couldn’t confirm email</h1>
+      <div class="card error">
+        <p id="error-message">Please try again with a fresh confirmation link from the app.</p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+      const SUPABASE_URL = "https://gzpmpmaicxydjneestcx.supabase.co";
+      const SUPABASE_ANON_KEY =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6cG1wbWFpY3h5ZGpuZWVzdGN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NjYxNDUsImV4cCI6MjA4ODA0MjE0NX0.c80PgrtvY5_vDH3xPMRD-FvxBNnzLQwicHaa5_1M7gw";
+
+      const OTP_TYPES = new Set(["signup", "recovery", "invite", "email_change", "email"]);
+
+      function showState(id) {
+        ["loading", "success", "already", "invalid", "error"].forEach(function (name) {
+          document.getElementById("state-" + name).classList.toggle("hidden", name !== id);
+        });
+      }
+
+      function extractHashParams() {
+        const hash = window.location.hash.replace(/^#/, "");
+        if (!hash) return {};
+        const result = {};
+        hash.split("&").forEach(function (pair) {
+          const parts = pair.split("=");
+          if (!parts[0]) return;
+          result[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || "");
+        });
+        return result;
+      }
+
+      function firstString(value) {
+        if (!value) return undefined;
+        return Array.isArray(value) ? value[0] : String(value);
+      }
+
+      function getAllParams() {
+        const query = Object.fromEntries(new URLSearchParams(window.location.search));
+        const fragment = extractHashParams();
+        return Object.assign({}, query, fragment);
+      }
+
+      async function run() {
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+          auth: { persistSession: false, detectSessionInUrl: false },
+        });
+
+        const params = getAllParams();
+        const callbackType = firstString(params.type);
+        const tokenHash = firstString(params.token_hash);
+        const code = firstString(params.code);
+        const accessToken = firstString(params.access_token);
+        const refreshToken = firstString(params.refresh_token);
+        const errorDescription = firstString(params.error_description) || firstString(params.error);
+
+        let status = "success";
+        let message;
+
+        try {
+          if (errorDescription) {
+            status = "error";
+            message = decodeURIComponent(errorDescription);
+          } else if (tokenHash && callbackType && OTP_TYPES.has(callbackType)) {
+            const { error } = await supabase.auth.verifyOtp({
+              token_hash: tokenHash,
+              type: callbackType,
+            });
+            if (error) {
+              const lower = (error.message || "").toLowerCase();
+              if (lower.includes("already")) status = "already";
+              else if (lower.includes("expired") || lower.includes("invalid")) status = "invalid";
+              else {
+                status = "error";
+                message = error.message;
+              }
+            }
+          } else if (code) {
+            const { error } = await supabase.auth.exchangeCodeForSession(code);
+            if (error) {
+              status = "error";
+              message = error.message;
+            }
+          } else if (accessToken && refreshToken) {
+            const { error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (error) {
+              status = "error";
+              message = error.message;
+            }
+          } else if (
+            !tokenHash &&
+            !code &&
+            !accessToken &&
+            !errorDescription &&
+            window.location.search === "" &&
+            window.location.hash === ""
+          ) {
+            showState("success");
+            return;
+          } else {
+            status = "invalid";
+          }
+        } catch (err) {
+          status = "error";
+          message = err instanceof Error ? err.message : "Unexpected confirmation error.";
+        } finally {
+          try {
+            await supabase.auth.signOut();
+          } catch (_) {}
+        }
+
+        if (status === "success") showState("success");
+        else if (status === "already") showState("already");
+        else if (status === "invalid") showState("invalid");
+        else {
+          if (message) document.getElementById("error-message").textContent = message;
+          showState("error");
+        }
+      }
+
+      run();
+    </script>
+  </body>
+</html>
