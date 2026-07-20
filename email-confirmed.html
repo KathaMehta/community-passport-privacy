@@ -60,6 +60,34 @@
       .hidden {
         display: none;
       }
+      label {
+        display: block;
+        font-weight: 600;
+        margin: 0.9rem 0 0.35rem;
+      }
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid #94a3b8;
+        border-radius: 8px;
+        padding: 0.75rem;
+        font: inherit;
+      }
+      button {
+        margin-top: 1rem;
+        border: 0;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        background: #115e59;
+        color: white;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
     </style>
   </head>
   <body>
@@ -104,13 +132,24 @@
     </div>
 
     <div id="state-recovery" class="hidden">
-      <h1>Reset your password</h1>
+      <h1>Choose a new password</h1>
       <div class="card">
-        <p>This is a password reset link. Open it in the Community Learning Passport app to choose a new password.</p>
-        <div class="actions">
-          <a id="open-app-link" class="button" href="#">Open app</a>
-          <a id="open-local-link" class="button secondary hidden" href="#">Open local dev app</a>
-        </div>
+        <p>Enter a new password for your Community Learning Passport account.</p>
+        <form id="password-form">
+          <label for="new-password">New password</label>
+          <input id="new-password" type="password" minlength="6" autocomplete="new-password" required />
+          <label for="confirm-password">Confirm new password</label>
+          <input id="confirm-password" type="password" minlength="6" autocomplete="new-password" required />
+          <button id="password-submit" type="submit">Update password</button>
+          <p id="password-error" class="hidden error card" role="alert"></p>
+        </form>
+      </div>
+    </div>
+
+    <div id="state-password-updated" class="hidden">
+      <h1>Password updated</h1>
+      <div class="card">
+        <p>Your password has been changed. Open the Community Learning Passport app and sign in with your new password.</p>
       </div>
     </div>
 
@@ -121,10 +160,8 @@
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6cG1wbWFpY3h5ZGpuZWVzdGN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NjYxNDUsImV4cCI6MjA4ODA0MjE0NX0.c80PgrtvY5_vDH3xPMRD-FvxBNnzLQwicHaa5_1M7gw";
 
       const OTP_TYPES = new Set(["signup", "invite", "email_change", "email"]);
-      const PASSWORD_RESET_PATH = "auth/reset-password";
-
       function showState(id) {
-        ["loading", "success", "already", "invalid", "error", "recovery"].forEach(function (name) {
+        ["loading", "success", "already", "invalid", "error", "recovery", "password-updated"].forEach(function (name) {
           document.getElementById("state-" + name).classList.toggle("hidden", name !== id);
         });
       }
@@ -152,29 +189,47 @@
         return Object.assign({}, query, fragment);
       }
 
-      function getCallbackSuffix() {
-        return window.location.search + window.location.hash;
+      function showPasswordError(message) {
+        const errorElement = document.getElementById("password-error");
+        errorElement.textContent = message;
+        errorElement.classList.remove("hidden");
       }
 
-      function buildResetUrl(base) {
-        if (base.endsWith("://")) return base + PASSWORD_RESET_PATH + getCallbackSuffix();
-        return base.replace(/\/+$/, "") + "/" + PASSWORD_RESET_PATH + getCallbackSuffix();
-      }
+      function setupPasswordForm(supabase) {
+        const form = document.getElementById("password-form");
+        const submit = document.getElementById("password-submit");
+        const errorElement = document.getElementById("password-error");
 
-      function showRecoveryRedirect() {
-        const appUrl = buildResetUrl("community-passport:///");
-        const localUrl = buildResetUrl("http://localhost:8081");
-        const openAppLink = document.getElementById("open-app-link");
-        const openLocalLink = document.getElementById("open-local-link");
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          errorElement.classList.add("hidden");
 
-        openAppLink.href = appUrl;
-        openLocalLink.href = localUrl;
-        if (window.location.hostname === "localhost" || window.location.hostname.endsWith(".github.io")) {
-          openLocalLink.classList.remove("hidden");
-        }
+          const password = document.getElementById("new-password").value;
+          const confirmation = document.getElementById("confirm-password").value;
 
-        showState("recovery");
-        window.location.href = appUrl;
+          if (password.length < 6) {
+            showPasswordError("Choose a password with at least 6 characters.");
+            return;
+          }
+          if (password !== confirmation) {
+            showPasswordError("Passwords don't match. Please enter the same new password in both fields.");
+            return;
+          }
+
+          submit.disabled = true;
+          submit.textContent = "Updating...";
+          try {
+            const { error } = await supabase.auth.updateUser({ password: password });
+            if (error) throw error;
+            await supabase.auth.signOut();
+            showState("password-updated");
+          } catch (err) {
+            showPasswordError(err && err.message ? err.message : "Could not update password. Request a new reset link and try again.");
+          } finally {
+            submit.disabled = false;
+            submit.textContent = "Update password";
+          }
+        });
       }
 
       async function run() {
@@ -190,11 +245,6 @@
         const refreshToken = firstString(params.refresh_token);
         const errorDescription = firstString(params.error_description) || firstString(params.error);
 
-        if (callbackType === "recovery") {
-          showRecoveryRedirect();
-          return;
-        }
-
         let status = "success";
         let message;
 
@@ -202,6 +252,31 @@
           if (errorDescription) {
             status = "error";
             message = decodeURIComponent(errorDescription);
+          } else if (callbackType === "recovery") {
+            if (tokenHash) {
+              const { error } = await supabase.auth.verifyOtp({
+                token_hash: tokenHash,
+                type: "recovery",
+              });
+              if (error) throw error;
+            } else if (code) {
+              const { error } = await supabase.auth.exchangeCodeForSession(code);
+              if (error) throw error;
+            } else if (accessToken && refreshToken) {
+              const { error } = await supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+              });
+              if (error) throw error;
+            } else {
+              status = "invalid";
+            }
+
+            if (status === "success") {
+              showState("recovery");
+              setupPasswordForm(supabase);
+              return;
+            }
           } else if (tokenHash && callbackType && OTP_TYPES.has(callbackType)) {
             const { error } = await supabase.auth.verifyOtp({
               token_hash: tokenHash,
@@ -248,9 +323,11 @@
           status = "error";
           message = err instanceof Error ? err.message : "Unexpected confirmation error.";
         } finally {
-          try {
-            await supabase.auth.signOut();
-          } catch (_) {}
+          if (callbackType !== "recovery" || status !== "success") {
+            try {
+              await supabase.auth.signOut();
+            } catch (_) {}
+          }
         }
 
         if (status === "success") showState("success");
