@@ -37,6 +37,26 @@
         background: #fef2f2;
         border-color: #fecaca;
       }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+      .button {
+        background: #115e59;
+        border-radius: 10px;
+        color: #fff;
+        display: inline-block;
+        font-weight: 700;
+        padding: 0.75rem 1rem;
+        text-decoration: none;
+      }
+      .button.secondary {
+        background: transparent;
+        border: 1px solid #115e59;
+        color: #115e59;
+      }
       .hidden {
         display: none;
       }
@@ -83,16 +103,28 @@
       </div>
     </div>
 
+    <div id="state-recovery" class="hidden">
+      <h1>Reset your password</h1>
+      <div class="card">
+        <p>This is a password reset link. Open it in the Community Learning Passport app to choose a new password.</p>
+        <div class="actions">
+          <a id="open-app-link" class="button" href="#">Open app</a>
+          <a id="open-local-link" class="button secondary hidden" href="#">Open local dev app</a>
+        </div>
+      </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
       const SUPABASE_URL = "https://gzpmpmaicxydjneestcx.supabase.co";
       const SUPABASE_ANON_KEY =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6cG1wbWFpY3h5ZGpuZWVzdGN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NjYxNDUsImV4cCI6MjA4ODA0MjE0NX0.c80PgrtvY5_vDH3xPMRD-FvxBNnzLQwicHaa5_1M7gw";
 
-      const OTP_TYPES = new Set(["signup", "recovery", "invite", "email_change", "email"]);
+      const OTP_TYPES = new Set(["signup", "invite", "email_change", "email"]);
+      const PASSWORD_RESET_PATH = "auth/reset-password";
 
       function showState(id) {
-        ["loading", "success", "already", "invalid", "error"].forEach(function (name) {
+        ["loading", "success", "already", "invalid", "error", "recovery"].forEach(function (name) {
           document.getElementById("state-" + name).classList.toggle("hidden", name !== id);
         });
       }
@@ -120,6 +152,31 @@
         return Object.assign({}, query, fragment);
       }
 
+      function getCallbackSuffix() {
+        return window.location.search + window.location.hash;
+      }
+
+      function buildResetUrl(base) {
+        if (base.endsWith("://")) return base + PASSWORD_RESET_PATH + getCallbackSuffix();
+        return base.replace(/\/+$/, "") + "/" + PASSWORD_RESET_PATH + getCallbackSuffix();
+      }
+
+      function showRecoveryRedirect() {
+        const appUrl = buildResetUrl("community-passport://");
+        const localUrl = buildResetUrl("http://localhost:8081");
+        const openAppLink = document.getElementById("open-app-link");
+        const openLocalLink = document.getElementById("open-local-link");
+
+        openAppLink.href = appUrl;
+        openLocalLink.href = localUrl;
+        if (window.location.hostname === "localhost" || window.location.hostname.endsWith(".github.io")) {
+          openLocalLink.classList.remove("hidden");
+        }
+
+        showState("recovery");
+        window.location.href = appUrl;
+      }
+
       async function run() {
         const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
           auth: { persistSession: false, detectSessionInUrl: false },
@@ -132,6 +189,11 @@
         const accessToken = firstString(params.access_token);
         const refreshToken = firstString(params.refresh_token);
         const errorDescription = firstString(params.error_description) || firstString(params.error);
+
+        if (callbackType === "recovery") {
+          showRecoveryRedirect();
+          return;
+        }
 
         let status = "success";
         let message;
